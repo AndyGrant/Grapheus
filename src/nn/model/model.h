@@ -200,11 +200,11 @@ struct Model {
         return loss_of_last_batch();
     }
 
-    void next_epoch(float epoch_loss, float validation_loss = 0.0) {
+    void next_epoch(float epoch_loss) {
         // quantitize weights
         quantize();
         quantize("latest.net");
-        write_epoch_result(epoch_loss, validation_loss);
+        write_epoch_result(epoch_loss);
         // save weights
         if (m_epoch % m_save_frequency == 0)
             save_weights(this->m_path / "weights" / (std::to_string(m_epoch) + ".state"));
@@ -226,8 +226,8 @@ struct Model {
         }
     }
 
-    void write_epoch_result(float train_loss, float validation_loss = 0.0) {
-        this->m_csv.write(m_epoch, train_loss, validation_loss);
+    void write_epoch_result(float train_loss) {
+        this->m_csv.write(m_epoch, train_loss);
     }
 
     void save_weights(const std::filesystem::path& name) {
