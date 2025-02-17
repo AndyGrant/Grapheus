@@ -40,6 +40,7 @@ namespace model {
     struct EtherealModel : ChessModel {
 
         SparseInput *halfkp1, *halfkp2;
+        DenseInput *bucket;
 
         // Defines the halfkp + virtual PSQT realtions
 
@@ -53,20 +54,22 @@ namespace model {
 
         // Defines the sizes of the Network's Layers
 
-        const size_t n_l0 = 768;
+        const size_t n_l0 = 1536;
         const size_t n_l1 = 8;
         const size_t n_l2 = 32;
         const size_t n_l3 = 1;
 
+        const size_t n_buckets = 7;
+
         // Defines miscellaneous hyper-parameters
 
-        const double wdl_percent  = 1.00;
-        const double eval_percent = 0.00;
+        const double wdl_percent  = 0.50;
+        const double eval_percent = 0.50;
         const double sigm_coeff   = 2.315 / 400.00;
 
         // Defines the mechanism of Quantization
 
-        const size_t quant_ft = 64; // x64
+        const size_t quant_ft = 32; // x32
         const size_t quant_l1 = 32; // x32
         const size_t quant_l2 = 1;  // None
         const size_t quant_l3 = 1;  // None
@@ -84,21 +87,25 @@ namespace model {
 
             halfkp1 = add<SparseInput>(n_features, 60); // Real + Virtual
             halfkp2 = add<SparseInput>(n_features, 60); // Real + Virtual
+            bucket  = add<DenseInput>(1);
 
             auto ft  = add<FeatureTransformer>(halfkp1, halfkp2, n_l0);
             ft->ft_regularization  = 1.0 / 16384.0 / 4194304.0;
 
             auto fta = add<ClippedRelu>(ft);
-            fta->max = 127.0;
+            fta->max = 127.0 / 32.0;
 
-            auto l1  = add<Affine>(fta, n_l1);
+            auto ftp = add<ChunkwiseMul>(fta, 4);
+
+            auto l1  = add<AffineMulti>(ftp, n_l1, n_buckets);
             auto l1a = add<ReLU>(l1);
 
-            auto l2  = add<Affine>(l1a, n_l2);
+            auto l2  = add<AffineBatched>(l1a, n_l2 * n_buckets, n_buckets);
             auto l2a = add<ReLU>(l2);
 
-            auto l3  = add<Affine>(l2a, n_l3);
-            auto l3a = add<Sigmoid>(l3, sigm_coeff);
+            auto l3  = add<AffineBatched>(l2a, n_l3 * n_buckets, n_buckets);
+            auto l3s = add<SelectSingle>(l3, bucket, n_buckets);
+            auto l3a = add<Sigmoid>(l3s, sigm_coeff);
 
             set_save_frequency(save_rate);
 
@@ -177,6 +184,10 @@ namespace model {
 
                     bb = chess::lsb_reset(bb);
                 }
+
+                int count = chess::popcount(pos->m_occupancy) - 5;
+                int b_idx = std::clamp<int>(count / 4, 0, n_buckets - 1);
+                bucket->dense_output.values(0, b) = b_idx;
 
                 float eval_target = 1.0 / (1.0 + expf(-pos->m_result.score * sigm_coeff));
                 float wdl_target  = (pos->m_result.wdl + 1) / 2.0f; // -> [1.0, 0.5, 0.0] WDL
